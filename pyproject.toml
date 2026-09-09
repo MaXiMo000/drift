@@ -1,0 +1,40 @@
+[project]
+# "drift" was already taken on PyPI, same story as most siblings in this
+# portfolio. The installed command stays the short name -- python-dateutil
+# installs `dateutil`, this installs `drift`.
+name = "drift-evidence"
+version = "0.1.0"
+description = "Does a device's real network traffic match what it's declared to be allowed to contact? Checked against a real packet capture."
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["iot", "privacy", "network", "pcap", "evidence", "provenance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+# scapy for reading the pcap format itself -- there's no lighter way to
+# parse real packet captures correctly. PyYAML for claims.yaml, same real
+# dependency invariant/escrow/portable already use for their own config
+# files, not a new convention introduced here.
+dependencies = ["scapy>=2.5", "PyYAML>=6.0"]
+
+urls.Homepage = "https://github.com/MaXiMo000/drift"
+urls.Source = "https://github.com/MaXiMo000/drift"
+urls.Issues = "https://github.com/MaXiMo000/drift/issues"
+urls.Changelog = "https://github.com/MaXiMo000/drift/releases"
+
+[project.scripts]
+drift = "drift.cli:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["drift*"]
