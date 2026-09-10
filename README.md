@@ -108,6 +108,34 @@ them:
   churn, the same IP can mean a different physical device over time — a
   real limitation of IP-based identification, not solved here.
 
+## Privacy
+
+Everything stays on the machine `drift` runs on. It makes no network
+calls of its own -- `rdpcap` reads the `.pcap` file from disk, and the
+report goes to stdout or a `--json` file you name; nothing is uploaded
+or phoned home anywhere.
+
+The thing to actually be careful of is upstream of drift, not in it: a
+`.pcap` captured on a shared network (a router's mirror port, a home
+Wi-Fi capture) records *every* device's traffic that happened to be on
+the wire, not just the one you're checking. `extract_domains` (in
+`pcap.py`) buckets by every source IP it sees, and `check_pcap` reports
+on every one of them -- a device with no entry in `claims.yaml` still
+comes back `unverified`, **with its full list of observed domains
+included in the report**, exactly the same as a declared device's would
+be. Point drift at a capture that includes a housemate's phone or a
+guest's laptop, and their browsing domains end up in your output, not
+just your smart bulb's.
+
+That's not a bug to fix -- filtering out "devices you didn't mean to
+capture" isn't something drift can know how to do, since it has no way
+to tell an incidental bystander's IP from a device you meant to declare
+later. It's a fact about what a shared-network capture *is*, and worth
+knowing before you paste a report somewhere or hand it to someone else:
+capture only what you mean to, and treat the report as covering
+everyone who was on the network at the time, not just the device named
+in your claims file.
+
 ## Tested against real traffic, not synthetic fixtures
 
 `tests/fixtures/http.cap` is a real capture downloaded from
@@ -131,6 +159,6 @@ python tests/test_check.py    # pass/fail/unverified classification
 python tests/test_cli.py      # the real CLI entry point, against the real fixture
 ```
 
-28 tests.
+29 tests.
 
 MIT licensed.

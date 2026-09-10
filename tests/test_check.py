@@ -15,6 +15,14 @@ class TestCheckDevice(unittest.TestCase):
         r = check_device("10.0.0.5", {"dns": ["vendor.com"], "http": []}, claims=None)
         self.assertEqual(r["status"], UNVERIFIED)
 
+    def test_an_undeclared_devices_observed_domains_still_appear_in_the_report(self):
+        """Privacy-relevant, documented in README: a device with no claims
+        entry (a housemate's phone caught in a shared-network capture, not
+        just an undeclared IoT device) still gets its full domain list
+        included in the output -- 'unverified' doesn't mean 'omitted'."""
+        r = check_device("10.0.0.9", {"dns": ["some-random-site.example"], "http": []}, claims=None)
+        self.assertEqual(r["observed_domains"], ["some-random-site.example"])
+
     def test_only_declared_domains_is_pass(self):
         claims = {"name": "bulb", "allowed_domains": ["vendor.com"]}
         r = check_device("10.0.0.5", {"dns": ["vendor.com"], "http": []}, claims)
