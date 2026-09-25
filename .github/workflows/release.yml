@@ -19,6 +19,7 @@ jobs:
           python-version: "3.13"
       - run: pip install -e .
       - run: python tests/test_pcap.py
+      - run: python tests/test_signals.py
       - run: python tests/test_claims.py
       - run: python tests/test_check.py
       - run: python tests/test_cli.py
