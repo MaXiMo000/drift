@@ -14,6 +14,20 @@ def _norm(domain: str) -> str:
     return domain.strip().lower().rstrip(".")
 
 
+def is_allowed(domain: str, allowed: list[str]) -> bool:
+    """An entry is an exact domain, or `*.example.com` for any subdomain of
+    example.com at any depth (not example.com itself -- list both if both
+    are allowed). Exact-by-default means an allow-list never quietly
+    covers more than it names."""
+    for entry in allowed:
+        if entry.startswith("*."):
+            if domain.endswith(entry[1:]):
+                return True
+        elif domain == entry:
+            return True
+    return False
+
+
 def check_device(device_id: str, observed: dict, claims: dict | None) -> dict:
     all_observed = sorted(set(observed.get("dns", [])) | set(observed.get("http", [])))
 
@@ -25,8 +39,8 @@ def check_device(device_id: str, observed: dict, claims: dict | None) -> dict:
             "observed_domains": all_observed, "unexpected_domains": [],
         }
 
-    allowed = {_norm(d) for d in claims["allowed_domains"]}
-    unexpected = [d for d in all_observed if _norm(d) not in allowed]
+    allowed = [_norm(d) for d in claims["allowed_domains"]]
+    unexpected = [d for d in all_observed if not is_allowed(_norm(d), allowed)]
 
     if unexpected:
         return {

@@ -67,8 +67,14 @@ devices:
   - id: "192.168.1.42"
     name: "smart bulb"
     allowed_domains:
-      - vendor.example.com
+      - vendor.example.com       # exactly this domain
+      - "*.cdn.example.net"      # any subdomain of cdn.example.net, at any depth
 ```
+
+A plain entry matches only itself: `vendor.example.com` does not cover
+`telemetry.vendor.example.com`. A leading `*.` covers every subdomain but
+not the domain itself, so list both if both are allowed. No other wildcard
+form is accepted, so an allow-list never quietly covers more than it names.
 
 Then check a real capture against it:
 

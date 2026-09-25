@@ -66,6 +66,16 @@ class TestLoadClaims(unittest.TestCase):
         with self.assertRaises(ClaimsError):
             load_claims(p)
 
+    def test_leading_wildcard_is_accepted(self):
+        p = self._write("devices:\n  - id: a\n    allowed_domains: ['*.Vendor.com']\n")
+        self.assertEqual(load_claims(p)["a"]["allowed_domains"], ["*.vendor.com"])
+
+    def test_any_other_wildcard_form_is_rejected(self):
+        for bad in ("'*vendor.com'", "'api.*.vendor.com'", "'*.*.vendor.com'", "123"):
+            p = self._write(f"devices:\n  - id: a\n    allowed_domains: [{bad}]\n")
+            with self.assertRaises(ClaimsError, msg=bad):
+                load_claims(p)
+
     def test_allowed_domains_defaults_to_empty_list(self):
         p = self._write("devices:\n  - id: x\n")
         claims = load_claims(p)
