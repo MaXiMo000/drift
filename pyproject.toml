@@ -3,7 +3,7 @@
 # portfolio. The installed command stays the short name -- python-dateutil
 # installs `dateutil`, this installs `drift`.
 name = "drift-evidence"
-version = "0.1.0"
+version = "0.1.1"
 description = "Does a device's real network traffic match what it's declared to be allowed to contact? Checked against a real packet capture."
 requires-python = ">=3.10"
 readme = "README.md"

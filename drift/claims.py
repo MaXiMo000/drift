@@ -45,6 +45,12 @@ def load_claims(path: str) -> dict[str, dict]:
         if not isinstance(allowed, list):
             raise ClaimsError(f"{path}: device '{dev_id}': 'allowed_domains' must be a list")
 
+        for d in allowed:
+            if not isinstance(d, str) or "*" in d.removeprefix("*."):
+                raise ClaimsError(
+                    f"{path}: device '{dev_id}': {d!r} -- the only wildcard form is a "
+                    f"leading '*.' (e.g. '*.example.com')")
+
         result[dev_id] = {
             "name": dev.get("name", dev_id),
             "allowed_domains": [_norm(d) for d in allowed],

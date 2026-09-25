@@ -31,39 +31,44 @@ def _parse_host_header(data: bytes) -> str | None:
 def extract_domains(pcap_path: str) -> dict[str, dict]:
     """Returns {source_ip: {"dns": [names...], "http": [hosts...]}},
     both lists sorted for deterministic output."""
-    from scapy.all import rdpcap  # imported here, not at module load, so
+    from scapy.all import PcapReader  # imported here, not at module load, so
     from scapy.layers.dns import DNS  # importing drift.claims/drift.check
     from scapy.layers.inet import IP, TCP  # never requires scapy at all
     from scapy.packet import Raw
 
-    packets = rdpcap(pcap_path)
     result: dict[str, dict] = {}
 
     def bucket(ip: str) -> dict:
         return result.setdefault(ip, {"dns": set(), "http": set()})
 
-    for pkt in packets:
-        if IP not in pkt:
-            continue
-        src = pkt[IP].src
+    # Streamed, not rdpcap(): a multi-GB capture from a real network tap
+    # shouldn't have to fit in memory. The file is opened here, not by
+    # scapy, because scapy's reader raises on a non-pcap file from inside
+    # its constructor without closing the handle it opened (a locked file
+    # on Windows).
+    with open(pcap_path, "rb") as f, PcapReader(f) as packets:
+        for pkt in packets:
+            if IP not in pkt:
+                continue
+            src = pkt[IP].src
 
-        # qr == 0 is a query, not a response -- the querier is the device
-        # actually asking, which is who this attributes the lookup to.
-        # qd is a PacketListField (scapy's newer versions warn on treating
-        # it as a single record) -- indexed explicitly, not accessed as if
-        # it were one object, so this doesn't silently break when a future
-        # scapy release removes the deprecated single-object shim.
-        if DNS in pkt and pkt[DNS].qd and pkt[DNS].qr == 0:
-            qname = pkt[DNS].qd[0].qname
-            if isinstance(qname, bytes):
-                qname = qname.decode("ascii", errors="replace")
-            bucket(src)["dns"].add(qname.rstrip("."))
+            # qr == 0 is a query, not a response -- the querier is the device
+            # actually asking, which is who this attributes the lookup to.
+            # qd is a PacketListField (scapy's newer versions warn on treating
+            # it as a single record) -- indexed explicitly, not accessed as if
+            # it were one object, so this doesn't silently break when a future
+            # scapy release removes the deprecated single-object shim.
+            if DNS in pkt and pkt[DNS].qd and pkt[DNS].qr == 0:
+                qname = pkt[DNS].qd[0].qname
+                if isinstance(qname, bytes):
+                    qname = qname.decode("ascii", errors="replace")
+                bucket(src)["dns"].add(qname.rstrip("."))
 
-        if TCP in pkt and Raw in pkt:
-            data = bytes(pkt[Raw])
-            if data.startswith((b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ")):
-                host = _parse_host_header(data)
-                if host:
-                    bucket(src)["http"].add(host)
+            if TCP in pkt and Raw in pkt:
+                data = bytes(pkt[Raw])
+                if data.startswith((b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ")):
+                    host = _parse_host_header(data)
+                    if host:
+                        bucket(src)["http"].add(host)
 
     return {ip: {"dns": sorted(v["dns"]), "http": sorted(v["http"])} for ip, v in result.items()}

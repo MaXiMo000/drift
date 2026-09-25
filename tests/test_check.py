@@ -40,6 +40,22 @@ class TestCheckDevice(unittest.TestCase):
         r = check_device("10.0.0.5", {"dns": ["vendor.com"], "http": ["vendor.com"]}, claims)
         self.assertEqual(r["observed_domains"], ["vendor.com"])
 
+    def test_wildcard_entry_covers_subdomains_at_any_depth(self):
+        claims = {"name": "cam", "allowed_domains": ["*.amazonaws.com"]}
+        obs = {"dns": ["s3.us-east-1.amazonaws.com", "iot.amazonaws.com"], "http": []}
+        self.assertEqual(check_device("d", obs, claims)["status"], PASS)
+
+    def test_wildcard_does_not_cover_the_apex_or_lookalike_domains(self):
+        claims = {"name": "cam", "allowed_domains": ["*.amazonaws.com"]}
+        for domain in ("amazonaws.com", "evilamazonaws.com", "amazonaws.com.evil.net"):
+            r = check_device("d", {"dns": [domain], "http": []}, claims)
+            self.assertEqual(r["status"], FAIL, domain)
+
+    def test_plain_entry_is_exact_and_never_covers_subdomains(self):
+        claims = {"name": "cam", "allowed_domains": ["vendor.example.com"]}
+        r = check_device("d", {"dns": ["telemetry.vendor.example.com"], "http": []}, claims)
+        self.assertEqual(r["status"], FAIL)
+
     def test_case_and_trailing_dot_do_not_cause_a_false_mismatch(self):
         claims = {"name": "bulb", "allowed_domains": ["vendor.com"]}
         r = check_device("10.0.0.5", {"dns": ["Vendor.com."], "http": []}, claims)
