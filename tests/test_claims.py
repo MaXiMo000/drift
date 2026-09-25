@@ -28,7 +28,7 @@ class TestLoadClaims(unittest.TestCase):
             "devices:\n  - id: '10.0.0.5'\n    name: bulb\n    allowed_domains: [Vendor.com]\n"
         )
         claims = load_claims(p)
-        self.assertEqual(claims, {"10.0.0.5": {"name": "bulb", "allowed_domains": ["vendor.com"]}})
+        self.assertEqual(claims, {"10.0.0.5": {"name": "bulb", "allowed_domains": ["vendor.com"], "allowed_ips": []}})
 
     def test_domain_normalization_lowercases_and_strips_trailing_dot(self):
         p = self._write("devices:\n  - id: x\n    allowed_domains: ['Example.COM.']\n")

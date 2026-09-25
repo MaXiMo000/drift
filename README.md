@@ -32,13 +32,14 @@ real IoT device, or a real home network to verify any of it against, and
 building software nobody can verify would be the one thing this whole
 portfolio has consistently refused to do.
 
-What genuinely is built and tested: the actual analysis core — reading a
-`.pcap`/`.pcapng` file, extracting which domains each device contacted
-(via DNS queries and HTTP `Host:` headers), and checking that against a
-declared allow-list. That core doesn't care whether the capture came from
-a live Pi tap, a router's own packet-capture feature, or a file someone
-handed you — a `.pcap` file is a `.pcap` file. **Wiring this to an actual
-live tap on real hardware is real, unstarted future work**, stated
+What genuinely is built and tested: the analysis core -- reading a
+`.pcap`/`.pcapng` file, working out what each device contacted (DNS
+lookups, TLS SNI, HTTP `Host:` headers, and IPs it reached without
+naming), and checking that against a declared allow-list or the
+manufacturer's own MUD file. That core doesn't care whether the capture
+came from a live Pi tap, a router's own packet-capture feature, or a file
+someone handed you -- a `.pcap` file is a `.pcap` file. **Wiring this to
+a live tap on real hardware is real, unstarted future work**, stated
 plainly rather than implied by silence.
 
 ## Scope
@@ -59,22 +60,31 @@ portfolio.)
 
 ## Use
 
-Declare which domains each device (identified by its IP in the capture)
-is allowed to contact, in `claims.yaml`:
+Declare what each device is allowed to contact, in `claims.yaml`:
 
 ```yaml
 devices:
-  - id: "192.168.1.42"
-    name: "smart bulb"
+  - id: "192.168.1.42"             # an IP -- or a MAC, "aa:bb:cc:dd:ee:ff",
+    name: "smart bulb"             #   which survives a DHCP lease change
     allowed_domains:
-      - vendor.example.com       # exactly this domain
-      - "*.cdn.example.net"      # any subdomain of cdn.example.net, at any depth
+      - vendor.example.com         # exactly this domain
+      - "*.cdn.example.net"        # any subdomain of cdn.example.net, at any depth
+    allowed_ips:                   # direct-IP contacts that are fine (optional)
+      - "203.0.113.0/24"
+    mud: bulb.mud.json             # the maker's RFC 8520 MUD file (optional)
 ```
 
 A plain entry matches only itself: `vendor.example.com` does not cover
 `telemetry.vendor.example.com`. A leading `*.` covers every subdomain but
 not the domain itself, so list both if both are allowed. No other wildcard
 form is accepted, so an allow-list never quietly covers more than it names.
+
+**MUD files.** [RFC 8520](https://www.rfc-editor.org/rfc/rfc8520)
+Manufacturer Usage Descriptions are the IETF standard for a manufacturer
+to publish exactly what its device needs to talk to. Point `mud:` at one
+(a path relative to `claims.yaml`) and every DNS name in its access lists
+joins the allow-list -- so the check becomes "does this device do only
+what its maker says it does," in the maker's own words.
 
 Then check a real capture against it:
 
@@ -83,41 +93,66 @@ drift check capture.pcap claims.yaml
 ```
 
 A device with no entry in `claims.yaml` reads `unverified`, never a
-silent pass — same three-status discipline as every claim-checking tool
-in this portfolio. `--json` prints the full report.
+silent pass -- same three-status discipline as every claim-checking tool
+in this portfolio. `--json` prints the full report. Exit code `1` if any
+device failed.
+
+**Don't have a claims file yet?** `drift learn` writes one from what a
+capture shows:
+
+```
+drift learn capture.pcap --device 192.168.1.42 --by-mac > claims.yaml
+```
+
+It's a baseline to review, not something to trust blindly: anything the
+device was already doing wrong during that capture is now in its
+allow-list. Capture a fresh setup, learn once, then check every later
+capture against it -- that's what catches a firmware update that starts
+talking to somewhere new.
 
 ## How domains are actually extracted
 
-Two signals, both read in the clear regardless of what runs on top of
-them:
+Four signals, none of which needs anything decrypted:
 
-- **DNS query names** — the device asking "where is X" is visible even
-  when the connection to X itself is fully encrypted. This is the signal
-  that matters for a real modern device, whose actual traffic is mostly
-  HTTPS.
-- **HTTP `Host:` headers** — cleartext HTTP only, a strictly narrower
-  signal, kept because it names a domain a request actually *reached*,
-  not just one that was looked up.
+- **DNS query names** -- the device asking "where is X", visible even when
+  the connection to X itself is encrypted.
+- **TLS SNI** -- the server name a TLS ClientHello sends in the clear
+  before encryption starts. This names almost every HTTPS connection a
+  modern device makes, including ones to a host it resolved some other way
+  (DNS-over-HTTPS, an answer cached from before the capture started).
+  ClientHellos split across TCP segments -- common now that post-quantum
+  key shares make them bigger than one packet -- are reassembled first.
+- **HTTP `Host:` headers** -- cleartext HTTP only.
+- **Direct IP contacts** -- connections to a public address the device
+  never looked up (no DNS answer anywhere in the capture) and never named
+  (no SNI, no `Host:`). A device that talks to hardcoded IPs is exactly the
+  one a DNS-only check misses. Each one fails the device unless it's in
+  `allowed_ips`. Local-network traffic is never counted.
+
+Devices are the addresses that *initiated* something; a server that only
+answered never shows up as a device.
 
 ## What this does NOT do
 
-- **Can't read a domain out of an HTTPS/TLS connection.** That needs
-  either the TLS ClientHello's SNI field (sent in the clear even over an
-  otherwise-encrypted connection, and not read here) or a decryption key.
-  Real, addable scope — not attempted in this version.
+- **Doesn't decrypt QUIC.** HTTP/3's ClientHello is encrypted with keys
+  derived from the connection ID -- recoverable, but real work of its own.
+  A QUIC connection to an address the device never resolved over plain DNS
+  therefore shows up as a direct-IP contact, not by name.
+- **Doesn't see names inside DNS-over-HTTPS** -- only the TLS SNI of the
+  DoH server itself.
 - **No live capture of anything.** `drift` reads a `.pcap` file that
   already exists; it has no code that touches a network interface. Making
   one (a Raspberry Pi tap, a router's mirror port, `tcpdump` itself) is
   the caller's job.
-- **Doesn't distinguish which device asked from which device the traffic
-  is actually *about*** beyond source IP. On a network with NAT or DHCP
-  churn, the same IP can mean a different physical device over time — a
-  real limitation of IP-based identification, not solved here.
+- **IP identity across a capture.** A claims file can name a device by
+  MAC, and drift records the MAC seen for each source IP. But within one
+  capture, if two devices held the same IP at different times, they're
+  still counted as one.
 
 ## Privacy
 
 Everything stays on the machine `drift` runs on. It makes no network
-calls of its own -- `rdpcap` reads the `.pcap` file from disk, and the
+calls of its own -- it reads the `.pcap` file from disk, streamed, and the
 report goes to stdout or a `--json` file you name; nothing is uploaded
 or phoned home anywhere.
 
@@ -159,12 +194,16 @@ point.
 
 ```
 pip install -e .
-python tests/test_pcap.py     # domain extraction, against the real fixture above
-python tests/test_claims.py   # claims.yaml validation
-python tests/test_check.py    # pass/fail/unverified classification
-python tests/test_cli.py      # the real CLI entry point, against the real fixture
+python tests/test_pcap.py      # extraction, against the real fixture above
+python tests/test_signals.py   # SNI, direct IPs, MAC ids, allowed_ips, MUD, learn
+python tests/test_claims.py    # claims.yaml validation
+python tests/test_check.py     # pass/fail/unverified classification
+python tests/test_cli.py       # the real CLI entry point, against the real fixture
 ```
 
-29 tests.
+`test_signals.py` uses a real ClientHello produced by the local OpenSSL
+(through Python's `ssl` module), split across two TCP segments inside a
+capture generated with scapy -- a real device's traffic can't be
+committed to a public repo, but the bytes being parsed are real.
 
 MIT licensed.
