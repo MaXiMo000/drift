@@ -67,6 +67,17 @@ def write_capture(path: str) -> None:
         eth / IP(src=DEVICE_IP, dst=QUIC_IP) / UDP(sport=50002, dport=443) / Raw(b"\xc3" + b"\0" * 40),
         # Local traffic is never a direct-IP finding.
         eth / IP(src=DEVICE_IP, dst="192.168.1.20") / TCP(sport=50003, dport=80, flags="S"),
+        # HTTP request split mid-Host-header (lotsofweb.pcapng taught
+        # "googleads.g.doublecl" this way). Local dst, so no direct-IP noise.
+        eth / IP(src=DEVICE_IP, dst="192.168.1.30") / TCP(sport=50004, dport=80, flags="PA")
+        / Raw(b"GET / HTTP/1.1\r\nHost: ads.vendor.exa"),
+        eth / IP(src=DEVICE_IP, dst="192.168.1.30") / TCP(sport=50004, dport=80, flags="PA")
+        / Raw(b"mple\r\nAccept: */*\r\n\r\n"),
+        # Reverse DNS and mDNS name no destination.
+        eth / IP(src=DEVICE_IP, dst="192.168.1.1") / UDP(sport=5353, dport=53)
+        / DNS(id=2, qr=0, qd=DNSQR(qname="10.1.168.192.in-addr.arpa")),
+        eth / IP(src=DEVICE_IP, dst="224.0.0.251") / UDP(sport=5353, dport=5353)
+        / DNS(id=3, qr=0, qd=DNSQR(qname="printer.local")),
     ]
     wrpcap(path, pkts)
 
@@ -104,6 +115,12 @@ class TestCapture(unittest.TestCase):
     def test_sni_from_a_hello_split_across_segments(self):
         self.assertEqual(self.observed[DEVICE_IP]["sni"], ["telemetry.vendor.example"])
 
+    def test_a_host_header_split_across_segments_is_whole(self):
+        self.assertEqual(self.observed[DEVICE_IP]["http"], ["ads.vendor.example"])
+
+    def test_lookups_that_name_no_destination_are_not_learned(self):
+        self.assertEqual(self.observed[DEVICE_IP]["dns"], ["api.vendor.example"])
+
     def test_direct_ips_are_the_unresolved_unnamed_public_ones(self):
         self.assertEqual(self.observed[DEVICE_IP]["direct_ips"], sorted([HARDCODED_IP, QUIC_IP]))
 
@@ -111,7 +128,7 @@ class TestCapture(unittest.TestCase):
         self.assertEqual(self.observed[DEVICE_IP]["mac"], DEVICE_MAC)
 
     def test_a_domain_seen_only_via_sni_is_checked(self):
-        claims = self._claims(f"devices:\n  - id: '{DEVICE_IP}'\n    allowed_domains: [api.vendor.example]\n"
+        claims = self._claims(f"devices:\n  - id: '{DEVICE_IP}'\n    allowed_domains: [api.vendor.example, ads.vendor.example]\n"
                               f"    allowed_ips: ['{HARDCODED_IP}', '{QUIC_IP}']\n")
         r = check_pcap(self.observed, claims)[0]
         self.assertEqual(r["status"], FAIL)

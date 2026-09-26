@@ -190,6 +190,21 @@ capture nobody built for this purpose — exactly the shape `drift` exists
 to catch, found in genuine traffic rather than constructed to prove a
 point.
 
+Also run against captures from Chris Sanders' *Practical Packet Analysis*
+([chrissanders/packets](https://github.com/chrissanders/packets)):
+
+- `cryptowall4_c2.pcapng`, a real CryptoWall 4 infection. Declare the
+  host may reach `*.microsoft.com` and `*.windowsupdate.com`, and
+  `drift check` fails it on `homealldaylong.com` -- the ransomware's
+  command-and-control domain.
+- `lotsofweb.pcapng` (10 MB of browsing) taught `drift learn` three kinds
+  of junk, all fixed in 0.3.0: `googleads.g.doublecl`, a Host header cut
+  off where the request split across TCP segments (request heads are now
+  reassembled, and only a complete line counts); `128.16.16.172.in-addr.arpa`,
+  a reverse lookup of the device's own address; and
+  `digg.com.localdomain`-style search-domain retries and `.local` mDNS
+  names. None of those is a destination.
+
 ## Tests
 
 ```

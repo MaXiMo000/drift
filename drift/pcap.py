@@ -28,7 +28,11 @@ import ipaddress
 
 
 def _parse_host_header(data: bytes) -> str | None:
-    for line in data.split(b"\r\n"):
+    """Only a complete line counts. A request split across TCP segments
+    ends mid-line, and lotsofweb.pcapng taught "googleads.g.doublecl" as an
+    allowed domain that way. The last piece after the split is unfinished
+    unless the data ends with CRLF."""
+    for line in data.split(b"\r\n")[:-1]:
         if line.lower().startswith(b"host:"):
             return line.split(b":", 1)[1].strip().decode("ascii", errors="replace")
     return None
@@ -70,6 +74,11 @@ def _is_public(ip: str) -> bool:
 
 # A ClientHello bigger than this is either garbage or not a ClientHello.
 _MAX_HELLO = 16 * 1024
+_MAX_REQUEST_HEAD = 8 * 1024
+# Lookups that name no destination: reverse DNS (a device asking who an
+# address is -- often its own), multicast DNS on the local link, and the
+# resolver's search-domain retries ("digg.com.localdomain").
+_NOT_A_DESTINATION = (".in-addr.arpa", ".ip6.arpa", ".local", ".localdomain")
 
 
 def extract_domains(pcap_path: str) -> dict[str, dict]:
@@ -87,6 +96,7 @@ def extract_domains(pcap_path: str) -> dict[str, dict]:
     named: set[tuple[str, str]] = set()  # (device, dst) pairs that carried an SNI/Host name
     contacted: dict[str, set[str]] = {}  # device -> public destinations it opened a flow to
     hellos: dict[tuple, bytearray] = {}  # TCP flow -> ClientHello bytes being reassembled
+    heads: dict[tuple, bytearray] = {}   # TCP flow -> HTTP request head being reassembled
     macs: dict[str, str] = {}            # first MAC seen sending from each IP
 
     def bucket(ip: str) -> dict:
@@ -117,7 +127,9 @@ def extract_domains(pcap_path: str) -> dict[str, dict]:
                     qname = dns.qd[0].qname
                     if isinstance(qname, bytes):
                         qname = qname.decode("ascii", errors="replace")
-                    bucket(src)["dns"].add(qname.rstrip(".").lower())
+                    qname = qname.rstrip(".").lower()
+                    if not qname.endswith(_NOT_A_DESTINATION):
+                        bucket(src)["dns"].add(qname)
                 elif dns.qr == 1:
                     for i in range(dns.ancount or 0):
                         try:
@@ -148,8 +160,13 @@ def extract_domains(pcap_path: str) -> dict[str, dict]:
                             bucket(src)["sni"].add(sni)
                             named.add((src, dst))
                     continue
-                if data.startswith((b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ", b"PATCH ", b"OPTIONS ")):
-                    host = _parse_host_header(data)
+                if flow in heads or data.startswith(
+                        (b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ", b"PATCH ", b"OPTIONS ")):
+                    buf = heads.setdefault(flow, bytearray())
+                    buf += data
+                    if b"\r\n\r\n" not in buf and len(buf) < _MAX_REQUEST_HEAD:
+                        continue  # the rest of the header is in the next segment
+                    host = _parse_host_header(bytes(heads.pop(flow)))
                     if host:
                         bucket(src)["http"].add(host.split(":")[0].lower())
                         named.add((src, dst))
