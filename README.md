@@ -110,6 +110,29 @@ allow-list. Capture a fresh setup, learn once, then check every later
 capture against it -- that's what catches a firmware update that starts
 talking to somewhere new.
 
+**Already run Zeek?** Point `check` or `learn` at the log directory
+instead of a capture:
+
+```
+drift check /opt/zeek/logs/current claims.yaml
+```
+
+drift reads `dns.log` (queries, and the addresses their answers handed
+out), `ssl.log` (the server name), `http.log` (the Host header) and
+`conn.log` (every flow, for direct-IP contacts) -- the same four signals
+it reads from packets. Both of Zeek's formats work, tab-separated and
+JSON, gzipped or not, rotated files included. Checked against real Zeek
+6.2 logs of the WRCCDC 2018 competition traffic (Brim's public sample
+set): 171 devices, about 3,000 DNS names and 1,700 TLS server names, and
+the tab-separated and JSON logs of that traffic give identical results.
+
+**Alerts.** `--notify VAR` posts the result to the Slack or Discord
+webhook URL held in the environment variable `VAR` when a device fails
+(`--notify-on always` for every run). The URL is read from the
+environment, never the command line, because it is a credential. Run it
+from cron or a systemd timer after each capture rotation and a new
+destination reaches you as a message.
+
 ## How domains are actually extracted
 
 Four signals, none of which needs anything decrypted:
@@ -140,10 +163,13 @@ answered never shows up as a device.
   therefore shows up as a direct-IP contact, not by name.
 - **Doesn't see names inside DNS-over-HTTPS** -- only the TLS SNI of the
   DoH server itself.
-- **No live capture of anything.** `drift` reads a `.pcap` file that
-  already exists; it has no code that touches a network interface. Making
-  one (a Raspberry Pi tap, a router's mirror port, `tcpdump` itself) is
-  the caller's job.
+- **No live capture of anything.** `drift` reads a capture file or Zeek
+  logs that already exist; it has no code that touches a network
+  interface. Making them (a Raspberry Pi tap, a router's mirror port,
+  `tcpdump`, Zeek itself) is the caller's job.
+- **No MAC addresses from Zeek** unless its conn.log records
+  `orig_l2_addr`, which Zeek's default configuration does not. Without
+  it, Zeek-read devices are keyed by IP only.
 - **IP identity across a capture.** A claims file can name a device by
   MAC, and drift records the MAC seen for each source IP. But within one
   capture, if two devices held the same IP at different times, they're

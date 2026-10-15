@@ -1,21 +1,31 @@
-"""drift check <pcap> <claims.yaml> [--json]
-drift learn <pcap> [--device IP]... [--by-mac]"""
+"""drift check <capture> <claims.yaml> [--json] [--notify ENV_VAR]
+drift learn <capture> [--device IP]... [--by-mac]
+
+<capture> is a .pcap/.pcapng file, or a directory of Zeek logs."""
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import yaml
 
 from .check import FAIL, PASS, UNVERIFIED, check_pcap
 from .claims import ClaimsError, load_claims
+from .notify import NotifyError, send
 from .pcap import extract_domains
+from .zeek import ZeekError, extract_zeek
 
 _TAG = {PASS: "OK", FAIL: "XX", UNVERIFIED: "??"}
 
 
 def _extract(pcap: str) -> dict:
+    if os.path.isdir(pcap):
+        try:
+            return extract_zeek(pcap)
+        except (ZeekError, OSError, ValueError) as exc:
+            sys.exit(f"drift: could not read the Zeek logs in {pcap}: {exc}")
     try:
         return extract_domains(pcap)
     except OSError as exc:
@@ -45,6 +55,13 @@ def _check(args) -> int:
             summary += f", {n_unverified} unverified"
         print(f"\n{summary}")
 
+    if args.notify:
+        try:
+            if send(results, args.notify, args.notify_on):
+                print(f"notified ${args.notify}", file=sys.stderr)
+        except NotifyError as exc:
+            print(f"drift: {exc}", file=sys.stderr)
+            return 2
     return 1 if any(r["status"] == FAIL for r in results) else 0
 
 
@@ -77,14 +94,20 @@ def main(argv: list[str] | None = None) -> int:
 
     check_p = sub.add_parser(
         "check", help="check devices in a packet capture against their declared destinations")
-    check_p.add_argument("pcap", help="a packet capture file (.pcap/.pcapng)")
+    check_p.add_argument("pcap", metavar="capture",
+                         help="a packet capture (.pcap/.pcapng) or a directory of Zeek logs")
     check_p.add_argument("claims", help="drift-claims.yaml")
     check_p.add_argument("--json", action="store_true", help="print the full report as JSON")
+    check_p.add_argument("--notify", metavar="ENV_VAR",
+                         help="POST the result to the Slack/Discord webhook URL held in this variable")
+    check_p.add_argument("--notify-on", choices=("fail", "always"), default="fail",
+                         help="when to notify (default: fail)")
     check_p.set_defaults(func=_check)
 
     learn_p = sub.add_parser(
         "learn", help="print a starting claims file from what a capture shows each device doing")
-    learn_p.add_argument("pcap")
+    learn_p.add_argument("pcap", metavar="capture",
+                         help="a packet capture (.pcap/.pcapng) or a directory of Zeek logs")
     learn_p.add_argument("--device", action="append", metavar="IP",
                          help="only this device (repeatable)")
     learn_p.add_argument("--by-mac", action="store_true",
