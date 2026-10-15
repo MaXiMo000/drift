@@ -1,9 +1,12 @@
 # drift
 
 [![ci](https://github.com/MaXiMo000/drift/actions/workflows/ci.yml/badge.svg)](https://github.com/MaXiMo000/drift/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/drift-evidence)](https://pypi.org/project/drift-evidence/)
 
 **Does a device's real network traffic match what it's declared to be
 allowed to contact? Checked against a real packet capture.**
+
+<p align="center"><img src="https://raw.githubusercontent.com/MaXiMo000/drift/main/docs/demo.svg" alt="drift reporting that a device contacted a domain outside its allow-list" width="100%"></p>
 
 [`witness`](https://github.com/MaXiMo000/witness) checks a website's own
 traffic against its declared privacy claims, from inside a browser.
@@ -22,25 +25,18 @@ $ drift check http.cap claims.yaml
 (Real output — see "Tested against real traffic" below for what capture
 this is and why.)
 
-## Read this before anything else: what's actually verified here
+## What is verified
 
-The idea this comes from (see the portfolio audit) is a **Raspberry Pi
-acting as a live network tap on a real home network**, checking a real
-smart-home device's real traffic in real time. **That deployment is not
-built or tested here** — this session has no access to a Raspberry Pi, a
-real IoT device, or a real home network to verify any of it against, and
-building software nobody can verify would be the one thing this whole
-portfolio has consistently refused to do.
+drift works on captures and Zeek logs. **A live tap** (a Raspberry Pi or
+router reading a home network in real time) **is not built or tested yet.**
 
-What genuinely is built and tested: the analysis core -- reading a
+What is built and tested: the analysis core -- reading a
 `.pcap`/`.pcapng` file, working out what each device contacted (DNS
 lookups, TLS SNI, HTTP `Host:` headers, and IPs it reached without
 naming), and checking that against a declared allow-list or the
 manufacturer's own MUD file. That core doesn't care whether the capture
 came from a live Pi tap, a router's own packet-capture feature, or a file
-someone handed you -- a `.pcap` file is a `.pcap` file. **Wiring this to
-a live tap on real hardware is real, unstarted future work**, stated
-plainly rather than implied by silence.
+someone handed you -- a `.pcap` file is a `.pcap` file.
 
 ## Scope
 
@@ -55,8 +51,8 @@ about any real product.
 pip install drift-evidence   # the command it installs is `drift`
 ```
 
-(`drift` was already taken on PyPI — same story as most siblings in this
-portfolio.)
+(`drift` was already taken on PyPI, so the package is `drift-evidence`; the command
+is still `drift`.)
 
 ## Use
 
@@ -93,8 +89,7 @@ drift check capture.pcap claims.yaml
 ```
 
 A device with no entry in `claims.yaml` reads `unverified`, never a
-silent pass -- same three-status discipline as every claim-checking tool
-in this portfolio. `--json` prints the full report. Exit code `1` if any
+silent pass. `--json` prints the full report. Exit code `1` if any
 device failed.
 
 **Don't have a claims file yet?** `drift learn` writes one from what a

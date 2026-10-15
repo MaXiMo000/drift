@@ -153,7 +153,7 @@ def extract_domains(pcap_path: str) -> dict[str, dict]:
                     buf += data
                     need = 5 + int.from_bytes(buf[3:5], "big") if len(buf) >= 5 else _MAX_HELLO
                     if len(buf) >= need or len(buf) >= _MAX_HELLO:
-                        # ponytail: in-order reassembly only, no retransmit or
+                        # In-order reassembly only, no retransmit or
                         # out-of-order handling; enough for a ClientHello.
                         sni = parse_client_hello_sni(bytes(hellos.pop(flow)))
                         if sni:
