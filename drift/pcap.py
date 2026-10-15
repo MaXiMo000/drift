@@ -173,12 +173,22 @@ def extract_domains(pcap_path: str) -> dict[str, dict]:
             elif UDP in pkt and _is_public(dst) and pkt[UDP].dport not in (53, 67, 68, 123, 5353):
                 contacted.setdefault(src, set()).add(dst)
 
-    # A device is anything that initiated something: a DNS query, a named
-    # connection, or a flow to a public address. Servers only answering
-    # never appear here.
+    return assemble(result, contacted, resolved, named, macs)
+
+
+def assemble(names: dict[str, dict], contacted: dict[str, set], resolved: set[str],
+             named: set[tuple[str, str]], macs: dict[str, str]) -> dict[str, dict]:
+    """The per-device report every reader produces, pcap or Zeek.
+
+    A device is anything that initiated something: a DNS query, a named
+    connection, or a flow to a public address. Servers only answering
+    never appear here. A direct IP contact is a public destination the
+    device opened a flow to that no DNS answer handed out and no SNI or
+    Host header named.
+    """
     out = {}
-    for ip in set(result) | set(contacted):
-        v = result.get(ip, {"dns": (), "http": (), "sni": ()})
+    for ip in set(names) | set(contacted):
+        v = names.get(ip, {"dns": (), "http": (), "sni": ()})
         direct = sorted(d for d in contacted.get(ip, ()) if d not in resolved and (ip, d) not in named)
         out[ip] = {"mac": macs.get(ip), "dns": sorted(v["dns"]), "http": sorted(v["http"]),
                    "sni": sorted(v["sni"]), "direct_ips": direct}
