@@ -49,7 +49,7 @@ def send(results: list[dict], env_var: str, when: str = "fail", opener=urllib.re
     text = summary(results)
     body = {"text": text, "content": text,
             "failed": [r["device_id"] for r in results if r["status"] == FAIL], "results": results}
-    request = urllib.request.Request(url, data=json.dumps(body).encode(),
+    request = urllib.request.Request(url, data=json.dumps(body).encode(),  # noqa: S310 - scheme checked above
                                      headers={"Content-Type": "application/json"}, method="POST")
     try:
         with opener(request, timeout=30) as response:

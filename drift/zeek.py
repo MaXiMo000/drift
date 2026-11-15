@@ -41,7 +41,7 @@ def read_log(path: pathlib.Path) -> Iterator[dict]:
     absent, the same shape JSON gives."""
     with _open(path) as f:
         fields: list[str] | None = None
-        sep, set_sep, unset, empty = "\t", ",", "-", "(empty)"
+        sep, unset, empty = "\t", "-", "(empty)"
         for line in f:
             line = line.rstrip("\n")
             if not line:
@@ -53,8 +53,6 @@ def read_log(path: pathlib.Path) -> Iterator[dict]:
                 key, _, value = line[1:].partition(" " if line.startswith("#separator") else sep)
                 if key == "separator":
                     sep = value.encode().decode("unicode_escape")
-                elif key == "set_separator":
-                    set_sep = value
                 elif key == "unset_field":
                     unset = value
                 elif key == "empty_field":
@@ -65,7 +63,7 @@ def read_log(path: pathlib.Path) -> Iterator[dict]:
             if fields is None:
                 raise ZeekError(f"{path.name}: a data line before any #fields header")
             record = {}
-            for name, value in zip(fields, line.split(sep)):
+            for name, value in zip(fields, line.split(sep), strict=False):
                 if value == unset:
                     continue
                 record[name] = [] if value == empty else value
