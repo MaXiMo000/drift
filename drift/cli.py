@@ -1,5 +1,6 @@
 """drift check <capture> <claims.yaml> [--json] [--notify ENV_VAR]
 drift learn <capture> [--device IP]... [--by-mac]
+drift watch <claims.yaml> [--iface NAME] [--window SECONDS] [--rounds N] [--notify ENV_VAR]
 
 <capture> is a .pcap/.pcapng file, or a directory of Zeek logs."""
 from __future__ import annotations
@@ -88,6 +89,24 @@ def _learn(args) -> int:
     return 0
 
 
+def _watch(args) -> int:
+    from .watch import CaptureError, watch
+    try:
+        claims = load_claims(args.claims)
+    except ClaimsError as exc:
+        sys.exit(f"drift: {exc}")
+    print(f"drift: watching {args.iface or 'the default interface'}, checking every {args.window:g}s "
+          f"against {len(claims)} declared device(s)", file=sys.stderr, flush=True)
+    try:
+        found = watch(claims, iface=args.iface, window=args.window, rounds=args.rounds,
+                      notify=args.notify, out=lambda line: print(line, flush=True))
+    except CaptureError as exc:
+        sys.exit(f"drift: {exc}")
+    except KeyboardInterrupt:
+        return 0
+    return 1 if found else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="drift")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -113,6 +132,18 @@ def main(argv: list[str] | None = None) -> int:
     learn_p.add_argument("--by-mac", action="store_true",
                          help="key devices by MAC address instead of IP, where the capture has one")
     learn_p.set_defaults(func=_learn)
+
+    watch_p = sub.add_parser(
+        "watch", help="check devices live on a network interface, reporting each new violation")
+    watch_p.add_argument("claims", help="drift-claims.yaml")
+    watch_p.add_argument("--iface", help="interface to capture on (default: the system's default)")
+    watch_p.add_argument("--window", type=float, default=300,
+                         help="seconds to capture before each check (default: 300)")
+    watch_p.add_argument("--rounds", type=int,
+                         help="stop after this many windows (default: run until stopped)")
+    watch_p.add_argument("--notify", metavar="ENV_VAR",
+                         help="POST each new violation to the Slack/Discord webhook URL held in this variable")
+    watch_p.set_defaults(func=_watch)
 
     args = parser.parse_args(argv)
     return args.func(args)
