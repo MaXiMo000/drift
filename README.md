@@ -27,16 +27,43 @@ this is and why.)
 
 ## What is verified
 
-drift works on captures and Zeek logs. **A live tap** (a Raspberry Pi or
-router reading a home network in real time) **is not built or tested yet.**
+drift works on captures, Zeek logs, and live on a network interface
+(`drift watch`, below). The live path reads packets with exactly the same
+code as a capture file, and is tested in CI by capturing real loopback
+traffic as root.
 
-What is built and tested: the analysis core -- reading a
+The analysis core -- reading a
 `.pcap`/`.pcapng` file, working out what each device contacted (DNS
 lookups, TLS SNI, HTTP `Host:` headers, and IPs it reached without
 naming), and checking that against a declared allow-list or the
 manufacturer's own MUD file. That core doesn't care whether the capture
 came from a live Pi tap, a router's own packet-capture feature, or a file
 someone handed you -- a `.pcap` file is a `.pcap` file.
+
+## Watch live
+
+On a machine that sees the traffic (a Raspberry Pi on a mirror port, a
+Linux router, the host itself):
+
+```
+$ sudo drift watch claims.yaml --iface eth0
+drift: watching eth0, checking every 300s against 1 declared device(s)
+08:28:06 [XX] 127.0.0.1: contacted telemetry.example, tracker.example, outside its declared allow-list
+```
+
+(Real output, from the CI check: a device allowed only `allowed.example`
+looked up `tracker.example` and sent an HTTP request naming
+`telemetry.example`.)
+
+Every `--window` seconds (default 300) it checks everything seen so far and
+prints only what's new: each violation once, and each device with no
+claims once. `--notify ENV_VAR` posts each new violation to a webhook, as
+`check` does. Evidence builds up across windows, so an address a device
+looked up an hour ago still isn't a "direct IP" contact now. `--rounds N`
+stops after N windows; it exits 1 if it saw any violation.
+
+Capturing needs root or `CAP_NET_RAW` on Linux and Npcap on Windows;
+without them it says so and exits rather than watching nothing.
 
 ## Scope
 
@@ -158,10 +185,9 @@ answered never shows up as a device.
   therefore shows up as a direct-IP contact, not by name.
 - **Doesn't see names inside DNS-over-HTTPS** -- only the TLS SNI of the
   DoH server itself.
-- **No live capture of anything.** `drift` reads a capture file or Zeek
-  logs that already exist; it has no code that touches a network
-  interface. Making them (a Raspberry Pi tap, a router's mirror port,
-  `tcpdump`, Zeek itself) is the caller's job.
+- **No way to see traffic it isn't given.** `drift watch` reads the
+  interface it runs on; getting a device's traffic there (a mirror port,
+  running on the router, a Pi as the access point) is the network's job.
 - **No MAC addresses from Zeek** unless its conn.log records
   `orig_l2_addr`, which Zeek's default configuration does not. Without
   it, Zeek-read devices are keyed by IP only.

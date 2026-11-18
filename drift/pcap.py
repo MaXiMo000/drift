@@ -81,27 +81,115 @@ _MAX_REQUEST_HEAD = 8 * 1024
 _NOT_A_DESTINATION = (".in-addr.arpa", ".ip6.arpa", ".local", ".localdomain")
 
 
+# Partial flows a long live capture never sees finish (a ClientHello whose
+# rest was dropped) would otherwise pile up forever.
+# ponytail: cleared wholesale past this many; per-flow expiry if it ever matters.
+_MAX_PENDING_FLOWS = 4096
+
+
+class Extractor:
+    """Reads packets one at a time and keeps what each device contacted.
+    `extract_domains` feeds it a capture file; `drift watch` feeds it a live
+    interface, so both read packets with the same code."""
+
+    def __init__(self):
+        from scapy.layers.dns import DNS  # imported here, not at module load, so
+        from scapy.layers.inet import IP, TCP, UDP  # importing drift.claims/drift.check
+        from scapy.layers.inet6 import IPv6  # never requires scapy at all
+        from scapy.layers.l2 import Ether
+        from scapy.packet import Raw
+        self._layers = (DNS, IP, TCP, UDP, IPv6, Ether, Raw)
+        self.result: dict[str, dict] = {}
+        self.resolved: set[str] = set()          # every address any DNS answer handed out
+        self.named: set[tuple[str, str]] = set()  # (device, dst) pairs that carried an SNI/Host name
+        self.contacted: dict[str, set[str]] = {}  # device -> public destinations it opened a flow to
+        self.hellos: dict[tuple, bytearray] = {}  # TCP flow -> ClientHello bytes being reassembled
+        self.heads: dict[tuple, bytearray] = {}   # TCP flow -> HTTP request head being reassembled
+        self.macs: dict[str, str] = {}            # first MAC seen sending from each IP
+
+    def _bucket(self, ip: str) -> dict:
+        return self.result.setdefault(ip, {"dns": set(), "http": set(), "sni": set()})
+
+    def feed(self, pkt) -> None:
+        DNS, IP, TCP, UDP, IPv6, Ether, Raw = self._layers
+        if IP in pkt:
+            src, dst = pkt[IP].src, pkt[IP].dst
+        elif IPv6 in pkt:
+            src, dst = pkt[IPv6].src, pkt[IPv6].dst
+        else:
+            return
+
+        if Ether in pkt:
+            self.macs.setdefault(src, pkt[Ether].src.lower())
+
+        if DNS in pkt:
+            dns = pkt[DNS]
+            if dns.qr == 0 and dns.qd:
+                # qd is a PacketListField in current scapy; indexed, not
+                # treated as one record.
+                qname = dns.qd[0].qname
+                if isinstance(qname, bytes):
+                    qname = qname.decode("ascii", errors="replace")
+                qname = qname.rstrip(".").lower()
+                if not qname.endswith(_NOT_A_DESTINATION):
+                    self._bucket(src)["dns"].add(qname)
+            elif dns.qr == 1:
+                for i in range(dns.ancount or 0):
+                    try:
+                        rr = dns.an[i]
+                    except (IndexError, TypeError):
+                        break
+                    if getattr(rr, "type", None) in (1, 28):  # A, AAAA
+                        self.resolved.add(str(rr.rdata))
+            return  # DNS traffic itself is never a "direct IP" contact
+
+        if TCP in pkt:
+            tcp = pkt[TCP]
+            if tcp.flags & 0x02 and not tcp.flags & 0x10 and _is_public(dst):  # SYN, not SYN-ACK
+                self.contacted.setdefault(src, set()).add(dst)
+            if Raw not in pkt:
+                return
+            data = bytes(pkt[Raw])
+            flow = (src, tcp.sport, dst, tcp.dport)
+            if flow in self.hellos or data[:2] == b"\x16\x03":
+                if len(self.hellos) > _MAX_PENDING_FLOWS:
+                    self.hellos.clear()
+                buf = self.hellos.setdefault(flow, bytearray())
+                buf += data
+                need = 5 + int.from_bytes(buf[3:5], "big") if len(buf) >= 5 else _MAX_HELLO
+                if len(buf) >= need or len(buf) >= _MAX_HELLO:
+                    # In-order reassembly only, no retransmit or
+                    # out-of-order handling; enough for a ClientHello.
+                    sni = parse_client_hello_sni(bytes(self.hellos.pop(flow)))
+                    if sni:
+                        self._bucket(src)["sni"].add(sni)
+                        self.named.add((src, dst))
+                return
+            if flow in self.heads or data.startswith(
+                    (b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ", b"PATCH ", b"OPTIONS ")):
+                if len(self.heads) > _MAX_PENDING_FLOWS:
+                    self.heads.clear()
+                buf = self.heads.setdefault(flow, bytearray())
+                buf += data
+                if b"\r\n\r\n" not in buf and len(buf) < _MAX_REQUEST_HEAD:
+                    return  # the rest of the header is in the next segment
+                host = _parse_host_header(bytes(self.heads.pop(flow)))
+                if host:
+                    self._bucket(src)["http"].add(host.split(":")[0].lower())
+                    self.named.add((src, dst))
+        elif UDP in pkt and _is_public(dst) and pkt[UDP].dport not in (53, 67, 68, 123, 5353):
+            self.contacted.setdefault(src, set()).add(dst)
+
+    def report(self) -> dict[str, dict]:
+        return assemble(self.result, self.contacted, self.resolved, self.named, self.macs)
+
+
 def extract_domains(pcap_path: str) -> dict[str, dict]:
     """Returns {source_ip: {"mac", "dns", "http", "sni", "direct_ips"}},
     every list sorted for deterministic output."""
-    from scapy.all import PcapReader  # imported here, not at module load, so
-    from scapy.layers.dns import DNS  # importing drift.claims/drift.check
-    from scapy.layers.inet import IP, TCP, UDP  # never requires scapy at all
-    from scapy.layers.inet6 import IPv6
-    from scapy.layers.l2 import Ether
-    from scapy.packet import Raw
+    from scapy.all import PcapReader
 
-    result: dict[str, dict] = {}
-    resolved: set[str] = set()          # every address any DNS answer handed out
-    named: set[tuple[str, str]] = set()  # (device, dst) pairs that carried an SNI/Host name
-    contacted: dict[str, set[str]] = {}  # device -> public destinations it opened a flow to
-    hellos: dict[tuple, bytearray] = {}  # TCP flow -> ClientHello bytes being reassembled
-    heads: dict[tuple, bytearray] = {}   # TCP flow -> HTTP request head being reassembled
-    macs: dict[str, str] = {}            # first MAC seen sending from each IP
-
-    def bucket(ip: str) -> dict:
-        return result.setdefault(ip, {"dns": set(), "http": set(), "sni": set()})
-
+    extractor = Extractor()
     # Streamed, not rdpcap(): a multi-GB capture from a real network tap
     # shouldn't have to fit in memory. The file is opened here, not by
     # scapy, because scapy's reader raises on a non-pcap file from inside
@@ -109,71 +197,8 @@ def extract_domains(pcap_path: str) -> dict[str, dict]:
     # on Windows).
     with open(pcap_path, "rb") as f, PcapReader(f) as packets:
         for pkt in packets:
-            if IP in pkt:
-                src, dst = pkt[IP].src, pkt[IP].dst
-            elif IPv6 in pkt:
-                src, dst = pkt[IPv6].src, pkt[IPv6].dst
-            else:
-                continue
-
-            if Ether in pkt:
-                macs.setdefault(src, pkt[Ether].src.lower())
-
-            if DNS in pkt:
-                dns = pkt[DNS]
-                if dns.qr == 0 and dns.qd:
-                    # qd is a PacketListField in current scapy; indexed, not
-                    # treated as one record.
-                    qname = dns.qd[0].qname
-                    if isinstance(qname, bytes):
-                        qname = qname.decode("ascii", errors="replace")
-                    qname = qname.rstrip(".").lower()
-                    if not qname.endswith(_NOT_A_DESTINATION):
-                        bucket(src)["dns"].add(qname)
-                elif dns.qr == 1:
-                    for i in range(dns.ancount or 0):
-                        try:
-                            rr = dns.an[i]
-                        except (IndexError, TypeError):
-                            break
-                        if getattr(rr, "type", None) in (1, 28):  # A, AAAA
-                            resolved.add(str(rr.rdata))
-                continue  # DNS traffic itself is never a "direct IP" contact
-
-            if TCP in pkt:
-                tcp = pkt[TCP]
-                if tcp.flags & 0x02 and not tcp.flags & 0x10 and _is_public(dst):  # SYN, not SYN-ACK
-                    contacted.setdefault(src, set()).add(dst)
-                if Raw not in pkt:
-                    continue
-                data = bytes(pkt[Raw])
-                flow = (src, tcp.sport, dst, tcp.dport)
-                if flow in hellos or data[:2] == b"\x16\x03":
-                    buf = hellos.setdefault(flow, bytearray())
-                    buf += data
-                    need = 5 + int.from_bytes(buf[3:5], "big") if len(buf) >= 5 else _MAX_HELLO
-                    if len(buf) >= need or len(buf) >= _MAX_HELLO:
-                        # In-order reassembly only, no retransmit or
-                        # out-of-order handling; enough for a ClientHello.
-                        sni = parse_client_hello_sni(bytes(hellos.pop(flow)))
-                        if sni:
-                            bucket(src)["sni"].add(sni)
-                            named.add((src, dst))
-                    continue
-                if flow in heads or data.startswith(
-                        (b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ", b"PATCH ", b"OPTIONS ")):
-                    buf = heads.setdefault(flow, bytearray())
-                    buf += data
-                    if b"\r\n\r\n" not in buf and len(buf) < _MAX_REQUEST_HEAD:
-                        continue  # the rest of the header is in the next segment
-                    host = _parse_host_header(bytes(heads.pop(flow)))
-                    if host:
-                        bucket(src)["http"].add(host.split(":")[0].lower())
-                        named.add((src, dst))
-            elif UDP in pkt and _is_public(dst) and pkt[UDP].dport not in (53, 67, 68, 123, 5353):
-                contacted.setdefault(src, set()).add(dst)
-
-    return assemble(result, contacted, resolved, named, macs)
+            extractor.feed(pkt)
+    return extractor.report()
 
 
 def assemble(names: dict[str, dict], contacted: dict[str, set], resolved: set[str],

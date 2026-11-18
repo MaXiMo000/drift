@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `drift watch`: live capture on a network interface, checked every `--window` seconds, printing and notifying each new violation once. Reads packets with the same code as `drift check`.
+
 ## 0.4.1 - 2026-10-16
 
 - Documentation: a demo of real output at the top of the README, a security policy, a changelog, and issue templates.

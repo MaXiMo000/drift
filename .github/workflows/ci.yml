@@ -39,6 +39,29 @@ jobs:
       - run: python tests/test_check.py
       - run: python tests/test_cli.py
       - run: python tests/test_zeek.py
+      - run: python tests/test_watch.py
+
+  live:
+    # A real capture: drift watch as root on the loopback interface, while
+    # tests/live_traffic.py looks up an allowed name and a tracker.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: pip install .
+      - name: drift watch flags the tracker and only the tracker
+        run: |
+          set -euo pipefail
+          printf 'devices:\n  - id: "127.0.0.1"\n    name: test device\n    allowed_domains: [allowed.example]\n' > /tmp/claims.yaml
+          python tests/live_traffic.py &
+          code=0
+          sudo "$(command -v drift)" watch /tmp/claims.yaml --iface lo --window 8 --rounds 1 | tee /tmp/out.txt || code=$?
+          test "$code" = 1   # exits 1 because it saw a violation
+          grep -q "tracker.example" /tmp/out.txt
+          grep -q "telemetry.example" /tmp/out.txt
+          ! grep -q "allowed.example" /tmp/out.txt
 
   package:
     # Build and install the distribution on every commit, not only at release --
